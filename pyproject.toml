@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "labour-market-au"
+version = "0.1.0"
+description = "Australian labour market data scraper - IVI, SALM, Employment Projections from JSA and DEWR"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.1",
+    "pyyaml>=6.0",
+    "click>=8.1",
+    "pandas>=2.1",
+    "openpyxl>=3.1",
+    "python-dotenv>=1.0",
+    "tenacity>=8.2",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "respx>=0.21",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "respx>=0.21",
+]
+
+[project.scripts]
+labour-market-au = "labour_market_au.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/labour_market_au"]

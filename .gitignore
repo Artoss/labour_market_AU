@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Data and output
+data/
+exports/
+logs/
+*.xlsx
+*.xls
+*.csv
+
+# Keep legacy data files
+!legacy_code/*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# uv
+uv.lock
+
+# Claude
+.claude/

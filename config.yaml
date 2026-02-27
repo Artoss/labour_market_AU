@@ -1,0 +1,56 @@
+# Australian Labour Market Data Scraper Configuration
+# ====================================================
+
+# Run mode: "full" or "incremental"
+run_mode: "incremental"
+
+# Target scope
+scope:
+  sites:
+    - "jsa"
+    - "dewr"
+  datasets:
+    - "salm"
+    - "ivi"
+    - "projections"
+    - "total_vacancies"
+
+# Rate limiting & politeness
+http:
+  min_delay_seconds: 2.0
+  max_delay_seconds: 5.0
+  max_retries: 3
+  retry_backoff_factor: 2.0
+  timeout_seconds: 120
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  default_headers:
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    Accept-Language: "en-AU,en;q=0.9"
+
+# Database (local PostgreSQL)
+database:
+  pg_host: "localhost"
+  pg_port: 5432
+  pg_database: "labour_market_au"
+  pg_user: "postgres"
+  pg_password: ""  # Use PGPASSWORD env var
+
+# Downloads
+downloads:
+  base_dir: "./data"
+
+# Export
+export:
+  enabled: true
+  format: "csv"
+  output_dir: "./exports"
+  timestamp_files: true
+
+# Logging
+logging:
+  level: "INFO"
+  file: "./logs/labour_market_au.log"
+  console: true
+  rotate_mb: 10
+  keep_backups: 5
