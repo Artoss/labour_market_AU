@@ -3,11 +3,11 @@ SALM (Small Area Labour Markets) Excel parser.
 Normalizes SALM Excel workbooks into long-format records.
 
 SALM Excel structure:
-  - Multiple sheets: "Smoothed unemployment rate (SA2)",
-    "Smoothed unemployed persons (SA2)", "Smoothed labour force (SA2)",
-    and equivalent LGA sheets.
-  - Header row at index 3 (0-based), with period columns (e.g. "Jun 2024").
-  - Multi-index: columns 0,1 are geo_name and geo_code (reversed: index_col=[1,0]).
+  - Multiple sheets, e.g. "Smoothed SA2 unemployment rate",
+    "Smoothed SA2 unemployment", "Smoothed SA2 labour force",
+    and equivalent LGA sheets. Also handles older naming conventions.
+  - Header row at index 3 (0-based), with period columns as datetimes.
+  - Multi-index: columns 0,1 are geo_name and geo_code (index_col=[0,1]).
   - Missing values represented as '-'.
 """
 
@@ -22,13 +22,23 @@ import pandas as pd
 logger = logging.getLogger("labour_market_au.extraction.salm_parser")
 
 # Map sheet name patterns to (measure, geo_level)
+# Handles both old format ("Smoothed unemployment rate (SA2)")
+# and new format ("Smoothed SA2 unemployment rate", "Smoothed LGA unemployment rates")
 SHEET_MAP = {
-    r"unemployment\s+rate.*sa2": ("unemployment_rate", "sa2"),
-    r"unemployed\s+persons.*sa2": ("unemployed_persons", "sa2"),
-    r"labour\s+force.*sa2": ("labour_force", "sa2"),
-    r"unemployment\s+rate.*lga": ("unemployment_rate", "lga"),
-    r"unemployed\s+persons.*lga": ("unemployed_persons", "lga"),
-    r"labour\s+force.*lga": ("labour_force", "lga"),
+    r"unemployment\s+rates?\b.*\bsa2\b": ("unemployment_rate", "sa2"),
+    r"\bsa2\b.*unemployment\s+rates?": ("unemployment_rate", "sa2"),
+    r"unemployed\s+persons?\b.*\bsa2\b": ("unemployed_persons", "sa2"),
+    r"\bsa2\b.*\bunemployment\b(?!.*\brate)": ("unemployed_persons", "sa2"),
+    r"\bsa2\b.*\bunemployed\b": ("unemployed_persons", "sa2"),
+    r"labour\s+force.*\bsa2\b": ("labour_force", "sa2"),
+    r"\bsa2\b.*labour\s+force": ("labour_force", "sa2"),
+    r"unemployment\s+rates?\b.*\blga\b": ("unemployment_rate", "lga"),
+    r"\blga\b.*unemployment\s+rates?": ("unemployment_rate", "lga"),
+    r"unemployed\s+persons?\b.*\blga\b": ("unemployed_persons", "lga"),
+    r"\blga\b.*\bunemployment\b(?!.*\brate)": ("unemployed_persons", "lga"),
+    r"\blga\b.*\bunemployed\b": ("unemployed_persons", "lga"),
+    r"labour\s+force.*\blga\b": ("labour_force", "lga"),
+    r"\blga\b.*labour\s+force": ("labour_force", "lga"),
 }
 
 
@@ -67,18 +77,18 @@ def parse_salm_excel(filepath: Path) -> list[dict]:
                     xlsx,
                     sheet_name=sheet_name,
                     header=3,
-                    index_col=[1, 0],
+                    index_col=[0, 1],
                     na_values="-",
                 )
 
-                # The index levels are (geo_code, geo_name) after index_col=[1,0]
+                # The index levels are (geo_name, geo_code) after index_col=[0,1]
                 # Drop any fully-empty rows
                 df = df.dropna(how="all")
 
-                # Period columns are everything that's not in the index
-                period_cols = [c for c in df.columns if isinstance(c, str)]
+                # Period columns: may be strings or datetimes
+                period_cols = [c for c in df.columns if not pd.isna(c)]
 
-                for (geo_code, geo_name), row in df.iterrows():
+                for (geo_name, geo_code), row in df.iterrows():
                     geo_code_str = str(geo_code).strip()
                     geo_name_str = str(geo_name).strip()
 
@@ -95,12 +105,18 @@ def parse_salm_excel(filepath: Path) -> list[dict]:
                             except (ValueError, TypeError):
                                 value = None
 
+                        # Normalize period to "Mon YYYY" string
+                        if hasattr(period_col, "strftime"):
+                            period_str = period_col.strftime("%b %Y")
+                        else:
+                            period_str = str(period_col).strip()
+
                         records.append({
                             "geo_code": geo_code_str,
                             "geo_name": geo_name_str,
                             "geo_level": geo_level,
                             "measure": measure,
-                            "period": str(period_col).strip(),
+                            "period": period_str,
                             "value": value,
                             "smoothed": True,
                         })

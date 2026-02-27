@@ -31,3 +31,28 @@ def test_classify_sheet_unknown():
 def test_classify_sheet_case_insensitive():
     result = _classify_sheet("SMOOTHED UNEMPLOYMENT RATE (SA2)")
     assert result == ("unemployment_rate", "sa2")
+
+
+# New format (2025+) sheet names
+def test_classify_sheet_new_sa2_rate():
+    assert _classify_sheet("Smoothed SA2 unemployment rate") == ("unemployment_rate", "sa2")
+
+
+def test_classify_sheet_new_sa2_unemployed():
+    assert _classify_sheet("Smoothed SA2 unemployment") == ("unemployed_persons", "sa2")
+
+
+def test_classify_sheet_new_sa2_force():
+    assert _classify_sheet("Smoothed SA2 labour force") == ("labour_force", "sa2")
+
+
+def test_classify_sheet_new_lga_rates():
+    assert _classify_sheet("Smoothed LGA unemployment rates") == ("unemployment_rate", "lga")
+
+
+def test_classify_sheet_new_lga_unemployed():
+    assert _classify_sheet("Smoothed LGA unemployment") == ("unemployed_persons", "lga")
+
+
+def test_classify_sheet_new_lga_force():
+    assert _classify_sheet("Smoothed LGA labour force") == ("labour_force", "lga")

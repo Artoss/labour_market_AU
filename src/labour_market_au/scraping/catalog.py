@@ -90,18 +90,18 @@ KNOWN_FILES: list[FileDataset] = [
     FileDataset(
         site="dewr",
         dataset="salm",
-        url="https://www.dewr.gov.au/sites/default/files/documents/salm-smoothed-sa2-datafile.xlsx",
+        url="https://www.dewr.gov.au/download/17068/salm-smoothed-sa2-datafiles-asgs-2021-september-quarter-2025/41973/salm-smoothed-sa2-datafiles-asgs-2021-september-quarter-2025/xlsx",
         filename="salm-smoothed-sa2-datafile.xlsx",
         parser_key="salm",
-        description="SALM Smoothed SA2 data",
+        description="SALM Smoothed SA2 data (ASGS 2021)",
     ),
     FileDataset(
         site="dewr",
         dataset="salm",
-        url="https://www.dewr.gov.au/sites/default/files/documents/salm-smoothed-lga-datafile.xlsx",
+        url="https://www.dewr.gov.au/download/17069/salm-smoothed-lga-datafiles-asgs-2025-september-quarter-2025/41975/salm-smoothed-lga-datafiles-asgs-2025-september-quarter-2025/xlsx",
         filename="salm-smoothed-lga-datafile.xlsx",
         parser_key="salm",
-        description="SALM Smoothed LGA data",
+        description="SALM Smoothed LGA data (ASGS 2025)",
     ),
 ]
 
