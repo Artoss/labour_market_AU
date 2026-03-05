@@ -145,17 +145,41 @@ def _run_migrate(config: AppConfig) -> None:
         db.close()
 
 
+# Filename prefix -> parser_key mapping for auto-discovered files
+_PARSER_KEY_PATTERNS: dict[str, str] = {
+    "employment_projections": "projections",
+    "internet_vacancies": "ivi",
+    "salm": "salm",
+    "tnv_data": "total_vacancies",
+    "labour_market_ratings": "rlmi",
+    "national_industry_trend": "labour_force_trending",
+    "national_occupation_trend": "labour_force_trending",
+    "state_industry_trend": "labour_force_trending",
+    "state_occupation_trend": "labour_force_trending",
+}
+
+
+def _infer_parser_key(filename: str, dataset: str) -> str:
+    """Infer a parser_key from a filename for discovered files."""
+    lower = filename.lower()
+    for prefix, key in _PARSER_KEY_PATTERNS.items():
+        if lower.startswith(prefix):
+            return key
+    return ""
+
+
 def _run_monitor(config: AppConfig) -> None:
     """Check pages for changes and report."""
-    from labour_market_au.scraping.catalog import get_sources
+    from labour_market_au.scraping.catalog import DataSource
     from labour_market_au.scraping.client import DownloadClient
-    from labour_market_au.scraping.page_monitor import check_page
+    from labour_market_au.scraping.page_monitor import (
+        _filename_from_url,
+        check_page,
+        diff_page_check,
+    )
     from labour_market_au.storage.database import Database
 
-    sources = get_sources(
-        sites=config.scope.sites,
-        datasets=config.scope.datasets,
-    )
+    sources = [DataSource(**page.model_dump()) for page in config.monitor_pages]
 
     client = DownloadClient(config.http, config.downloads.base_dir)
     db = Database(config.database)
@@ -166,20 +190,46 @@ def _run_monitor(config: AppConfig) -> None:
         click.echo(f"Checking {len(sources)} data source pages...")
         for source in sources:
             try:
-                known_hash = db.get_page_hash(source.page_url)
+                # Fetch previous state before checking
+                prev = db.get_monitored_page(source.page_url)
+                prev_links: list[str] | None = None
+                prev_release: str | None = None
+                if prev:
+                    raw = prev.get("download_links")
+                    if raw:
+                        prev_links = json.loads(raw) if isinstance(raw, str) else raw
+                    prev_release = prev.get("last_updated_label")
+
+                known_hash = prev["content_hash"] if prev else None
                 html = client.fetch_page(source.page_url)
                 result = check_page(html, source, known_hash)
 
-                status_str = "CHANGED" if result.changed else "unchanged"
+                # Compute diff
+                diff = diff_page_check(result, prev_links, prev_release)
+
+                status_str = "CHANGED" if diff.content_changed else "unchanged"
                 click.echo(
                     f"  [{status_str}] {source.site}/{source.dataset} "
                     f"- {len(result.download_links)} download links"
                 )
-                if result.last_updated_label:
+                if diff.release_date_changed:
+                    click.echo(
+                        f"           Release date: {diff.old_release_date!r} "
+                        f"-> {diff.new_release_date!r}"
+                    )
+                elif result.last_updated_label:
                     click.echo(f"           Release: {result.last_updated_label}")
-                if result.download_links:
+                if diff.new_links:
+                    click.echo(f"           New downloads ({len(diff.new_links)}):")
+                    for link in diff.new_links:
+                        click.echo(f"             + {_filename_from_url(link)}")
+                if diff.removed_links:
+                    click.echo(f"           Removed downloads ({len(diff.removed_links)}):")
+                    for link in diff.removed_links:
+                        click.echo(f"             - {_filename_from_url(link)}")
+                if not diff.new_links and not diff.removed_links and result.download_links:
                     for link in result.download_links[:5]:
-                        click.echo(f"           -> {link}")
+                        click.echo(f"           -> {_filename_from_url(link)}")
                     if len(result.download_links) > 5:
                         click.echo(f"           ... and {len(result.download_links) - 5} more")
 
@@ -200,6 +250,19 @@ def _run_monitor(config: AppConfig) -> None:
                     links_found=len(result.download_links),
                 )
 
+                # Auto-discover download links
+                for link_url in result.download_links:
+                    fname = _filename_from_url(link_url)
+                    db.upsert_discovered_file({
+                        "page_url": source.page_url,
+                        "site": source.site,
+                        "dataset": source.dataset,
+                        "url": link_url,
+                        "filename": fname,
+                        "parser_key": _infer_parser_key(fname, source.dataset),
+                    })
+                db.mark_removed_files(source.page_url, result.download_links)
+
             except Exception as e:
                 click.echo(f"  [ERROR] {source.site}/{source.dataset}: {e}")
                 logger.error("Monitor error for %s: %s", source.page_url, e, exc_info=True)
@@ -216,20 +279,23 @@ def _run_download(config: AppConfig, datasets: list[str] | None = None) -> None:
     from labour_market_au.storage.database import Database
 
     effective_datasets = datasets or config.scope.datasets
-    files = get_files(
-        sites=config.scope.sites,
-        datasets=effective_datasets,
-    )
-
-    if not files:
-        click.echo("No files in catalog for the selected scope. Run 'monitor' first to discover downloads.")
-        return
 
     client = DownloadClient(config.http, config.downloads.base_dir)
     db = Database(config.database)
     try:
         db.connect()
         db.ensure_schema("migrations")
+
+        discovered = db.get_discovered_files()
+        files = get_files(
+            sites=config.scope.sites,
+            datasets=effective_datasets,
+            discovered=discovered,
+        )
+
+        if not files:
+            click.echo("No files in catalog for the selected scope. Run 'monitor' first to discover downloads.")
+            return
 
         # Get known hashes for incremental mode
         known_hashes: dict[str, str] = {}
@@ -268,17 +334,28 @@ def _run_load(
         db.connect()
         db.ensure_schema("migrations")
 
+        # Dataset-to-site mapping
+        dataset_site_map = {
+            "salm": "dewr",
+            "ivi": "jsa",
+            "projections": "jsa",
+            "total_vacancies": "jsa",
+            "rlmi": "jsa",
+            "labour_force_trending": "jsa",
+        }
+
         if dry_run:
             click.echo("Dry run - scanning for files...")
             for ds in effective_datasets:
-                ds_dir = data_dir / ds
+                site = dataset_site_map.get(ds, "jsa")
+                ds_dir = data_dir / site / ds
                 if ds_dir.exists():
                     files = list(ds_dir.glob("*.xls*"))
                     click.echo(f"  {ds}: {len(files)} files")
                     for f in files:
                         click.echo(f"    {f.name} ({f.stat().st_size:,} bytes)")
                 else:
-                    click.echo(f"  {ds}: no data directory")
+                    click.echo(f"  {ds}: no data directory ({ds_dir})")
             return
 
         run_id = db.start_run(run_mode=config.run_mode, config_hash=config.config_hash())
@@ -287,14 +364,15 @@ def _run_load(
         files_loaded = 0
 
         for ds in effective_datasets:
-            ds_dir = data_dir / ds
+            site = dataset_site_map.get(ds, "jsa")
+            ds_dir = data_dir / site / ds
             if not ds_dir.exists():
                 continue
             for filepath in sorted(ds_dir.glob("*.xls*")):
                 try:
                     count = load_from_disk(
                         db, run_id,
-                        site="dewr",  # TODO: infer from catalog
+                        site=site,
                         dataset=ds,
                         filename=filepath.name,
                         url="",
@@ -324,7 +402,7 @@ def _run_load(
 
 def _run_full_pipeline(config: AppConfig, datasets: list[str] | None = None) -> None:
     """Full pipeline: monitor -> download -> parse -> load."""
-    from labour_market_au.scraping.catalog import get_files, get_sources
+    from labour_market_au.scraping.catalog import DataSource, get_files
     from labour_market_au.scraping.client import DownloadClient
     from labour_market_au.scraping.page_monitor import check_page
     from labour_market_au.storage.database import Database
@@ -341,7 +419,7 @@ def _run_full_pipeline(config: AppConfig, datasets: list[str] | None = None) -> 
 
         # 1. Monitor pages
         click.echo("=== Monitoring pages ===")
-        sources = get_sources(sites=config.scope.sites, datasets=effective_datasets)
+        sources = [DataSource(**page.model_dump()) for page in config.monitor_pages]
         for source in sources:
             try:
                 known_hash = db.get_page_hash(source.page_url)
@@ -363,7 +441,12 @@ def _run_full_pipeline(config: AppConfig, datasets: list[str] | None = None) -> 
 
         # 2. Download
         click.echo("\n=== Downloading files ===")
-        files = get_files(sites=config.scope.sites, datasets=effective_datasets)
+        discovered = db.get_discovered_files()
+        files = get_files(
+            sites=config.scope.sites,
+            datasets=effective_datasets,
+            discovered=discovered,
+        )
         known_hashes: dict[str, str] = {}
         if config.run_mode == "incremental":
             known_hashes = db.get_known_hashes()
@@ -510,17 +593,12 @@ def _run_export(
 
 def _run_list(config: AppConfig) -> None:
     """List all data sources and known files."""
-    from labour_market_au.scraping.catalog import get_files, get_sources
-
-    sources = get_sources(
-        sites=config.scope.sites,
-        datasets=config.scope.datasets,
-    )
+    from labour_market_au.scraping.catalog import get_files
 
     click.echo("=== Data Sources (monitored pages) ===")
     click.echo(f"{'Site':<8} {'Dataset':<18} {'Frequency':<12} {'URL'}")
     click.echo("-" * 90)
-    for s in sources:
+    for s in config.monitor_pages:
         click.echo(f"{s.site:<8} {s.dataset:<18} {s.update_frequency:<12} {s.page_url}")
 
     files = get_files(

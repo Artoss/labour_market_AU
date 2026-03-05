@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from labour_market_au.config import AppConfig, DatabaseConfig, load_config
+from labour_market_au.config import AppConfig, DatabaseConfig, MonitorPageConfig, load_config
 
 
 def test_default_config():
@@ -38,3 +38,36 @@ def test_load_config_missing_file(tmp_path):
         env_path=tmp_path / "nonexistent.env",
     )
     assert isinstance(config, AppConfig)
+
+
+def test_monitor_pages_from_dict():
+    """monitor_pages should load correctly from a config dict."""
+    config = AppConfig(
+        monitor_pages=[
+            {
+                "site": "jsa",
+                "dataset": "ivi",
+                "page_url": "https://example.com/ivi",
+                "update_frequency": "monthly",
+                "content_selector": "div.content",
+                "date_selector": "div.date strong",
+            },
+            {
+                "site": "dewr",
+                "dataset": "salm_smoothed",
+                "page_url": "https://example.com/salm",
+            },
+        ],
+    )
+    assert len(config.monitor_pages) == 2
+    assert isinstance(config.monitor_pages[0], MonitorPageConfig)
+    assert config.monitor_pages[0].site == "jsa"
+    assert config.monitor_pages[0].date_selector == "div.date strong"
+    assert config.monitor_pages[1].update_frequency == "quarterly"  # default
+    assert config.monitor_pages[1].content_selector == ""  # default
+
+
+def test_monitor_pages_default_empty():
+    """monitor_pages should default to an empty list."""
+    config = AppConfig()
+    assert config.monitor_pages == []

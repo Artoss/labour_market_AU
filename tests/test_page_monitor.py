@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from labour_market_au.scraping.catalog import DataSource
-from labour_market_au.scraping.page_monitor import check_page
+from labour_market_au.scraping.page_monitor import (
+    PageCheckResult,
+    check_page,
+    diff_page_check,
+)
 
 
 SAMPLE_HTML = """
@@ -63,3 +67,73 @@ def test_check_page_extracts_release_date():
     result = check_page(SAMPLE_HTML, source, known_hash=None)
     assert result.last_updated_label is not None
     assert "December 2024" in result.last_updated_label
+
+
+# --- diff_page_check tests ---
+
+
+def _make_result(**kwargs) -> PageCheckResult:
+    defaults = {
+        "page_url": "https://example.com/page",
+        "changed": False,
+        "content_hash": "abc123",
+        "download_links": [],
+        "last_updated_label": None,
+    }
+    defaults.update(kwargs)
+    return PageCheckResult(**defaults)
+
+
+def test_diff_no_changes():
+    current = _make_result(
+        download_links=["https://example.com/a.xlsx"],
+        last_updated_label="Jan 2025",
+    )
+    diff = diff_page_check(current, ["https://example.com/a.xlsx"], "Jan 2025")
+    assert diff.content_changed is False
+    assert diff.new_links == []
+    assert diff.removed_links == []
+    assert diff.release_date_changed is False
+
+
+def test_diff_new_links():
+    current = _make_result(
+        download_links=["https://example.com/a.xlsx", "https://example.com/b.xlsx"],
+    )
+    diff = diff_page_check(current, ["https://example.com/a.xlsx"], None)
+    assert diff.new_links == ["https://example.com/b.xlsx"]
+    assert diff.removed_links == []
+
+
+def test_diff_removed_links():
+    current = _make_result(
+        download_links=["https://example.com/a.xlsx"],
+    )
+    diff = diff_page_check(
+        current,
+        ["https://example.com/a.xlsx", "https://example.com/old.xlsx"],
+        None,
+    )
+    assert diff.new_links == []
+    assert diff.removed_links == ["https://example.com/old.xlsx"]
+
+
+def test_diff_release_date_changed():
+    current = _make_result(last_updated_label="Feb 2025")
+    diff = diff_page_check(current, [], "Jan 2025")
+    assert diff.release_date_changed is True
+    assert diff.old_release_date == "Jan 2025"
+    assert diff.new_release_date == "Feb 2025"
+
+
+def test_diff_first_check_no_previous():
+    current = _make_result(
+        changed=True,
+        download_links=["https://example.com/a.xlsx"],
+        last_updated_label="Jan 2025",
+    )
+    diff = diff_page_check(current, None, None)
+    assert diff.content_changed is True
+    assert diff.new_links == ["https://example.com/a.xlsx"]
+    assert diff.removed_links == []
+    assert diff.release_date_changed is True

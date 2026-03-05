@@ -195,21 +195,20 @@ class Database:
                 cur.execute(
                     """
                     INSERT INTO salm_data
-                        (geo_code, geo_name, geo_level, measure, period,
+                        (geo_code, geo_name, geo_type, measure, period,
                          value, smoothed, scrape_run_id)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (geo_code, geo_level, measure, period)
+                    ON CONFLICT (geo_code, geo_type, measure, period, smoothed)
                     DO UPDATE SET
                         geo_name = EXCLUDED.geo_name,
                         value = EXCLUDED.value,
-                        smoothed = EXCLUDED.smoothed,
                         scrape_run_id = EXCLUDED.scrape_run_id,
                         loaded_at = NOW()
                     """,
                     (
                         rec["geo_code"],
                         rec["geo_name"],
-                        rec["geo_level"],
+                        rec["geo_type"],
                         rec["measure"],
                         rec["period"],
                         rec.get("value"),
@@ -224,79 +223,103 @@ class Database:
     # --- IVI Data ---
 
     def upsert_ivi_data(self, records: list[dict], run_id: int) -> int:
-        """Bulk upsert IVI records. Returns count of rows upserted."""
+        """Bulk upsert IVI records using executemany. Returns count."""
         if not records:
             return 0
+
+        sql = """
+            INSERT INTO ivi_data
+                (anzsco_code, anzsco_title, geo_area, skill_level,
+                 period, value, index_type, file_type, geo_type, scrape_run_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (anzsco_code, geo_area, skill_level, period, index_type, file_type)
+            DO UPDATE SET
+                anzsco_title = EXCLUDED.anzsco_title,
+                value = EXCLUDED.value,
+                geo_type = EXCLUDED.geo_type,
+                scrape_run_id = EXCLUDED.scrape_run_id,
+                loaded_at = NOW()
+        """
+
+        params = [
+            (
+                rec["anzsco_code"],
+                rec.get("anzsco_title", ""),
+                rec.get("geo_area", ""),
+                rec.get("skill_level", ""),
+                rec["period"],
+                rec.get("value"),
+                rec.get("index_type", "level"),
+                rec.get("file_type", ""),
+                rec.get("geo_type", ""),
+                run_id,
+            )
+            for rec in records
+        ]
+
+        batch_size = 10000
         count = 0
-        with self.cursor() as cur:
-            for rec in records:
-                cur.execute(
-                    """
-                    INSERT INTO ivi_data
-                        (anzsco_code, anzsco_title, state, skill_level,
-                         period, value, index_type, scrape_run_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (anzsco_code, state, skill_level, period, index_type)
-                    DO UPDATE SET
-                        anzsco_title = EXCLUDED.anzsco_title,
-                        value = EXCLUDED.value,
-                        scrape_run_id = EXCLUDED.scrape_run_id,
-                        loaded_at = NOW()
-                    """,
-                    (
-                        rec["anzsco_code"],
-                        rec.get("anzsco_title", ""),
-                        rec.get("state", ""),
-                        rec.get("skill_level", ""),
-                        rec["period"],
-                        rec.get("value"),
-                        rec.get("index_type", "level"),
-                        run_id,
-                    ),
-                )
-                count += 1
+        for i in range(0, len(params), batch_size):
+            batch = params[i : i + batch_size]
+            with self.cursor() as cur:
+                cur.executemany(sql, batch)
+            count += len(batch)
+            if count % 50000 == 0 or count == len(params):
+                logger.info("IVI upsert progress: %d / %d", count, len(params))
+
         logger.info("Upserted %d IVI records for run #%d", count, run_id)
         return count
 
     # --- Projections Data ---
 
     def upsert_projections_data(self, records: list[dict], run_id: int) -> int:
-        """Bulk upsert Employment Projections records."""
+        """Bulk upsert Employment Projections records using executemany."""
         if not records:
             return 0
+
+        sql = """
+            INSERT INTO projections_data
+                (dimension_type, anzsco_code, occupation_name, industry_code,
+                 industry_name, geo_area, geo_type, measure, base_year,
+                 projection_year, value, scrape_run_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (dimension_type, anzsco_code, industry_code, geo_area,
+                         measure, base_year, projection_year)
+            DO UPDATE SET
+                occupation_name = EXCLUDED.occupation_name,
+                industry_name = EXCLUDED.industry_name,
+                geo_type = EXCLUDED.geo_type,
+                value = EXCLUDED.value,
+                scrape_run_id = EXCLUDED.scrape_run_id,
+                loaded_at = NOW()
+        """
+
+        params = [
+            (
+                rec.get("dimension_type", ""),
+                rec.get("anzsco_code", ""),
+                rec.get("occupation_name", ""),
+                rec.get("industry_code", ""),
+                rec.get("industry_name", ""),
+                rec.get("geo_area", ""),
+                rec.get("geo_type", ""),
+                rec["measure"],
+                rec["base_year"],
+                rec["projection_year"],
+                rec.get("value"),
+                run_id,
+            )
+            for rec in records
+        ]
+
+        batch_size = 10000
         count = 0
-        with self.cursor() as cur:
-            for rec in records:
-                cur.execute(
-                    """
-                    INSERT INTO projections_data
-                        (anzsco_code, occupation_name, industry_code,
-                         industry_name, state, measure, base_year,
-                         projection_year, value, scrape_run_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (anzsco_code, industry_code, state, measure,
-                                 base_year, projection_year)
-                    DO UPDATE SET
-                        occupation_name = EXCLUDED.occupation_name,
-                        industry_name = EXCLUDED.industry_name,
-                        value = EXCLUDED.value,
-                        scrape_run_id = EXCLUDED.scrape_run_id,
-                        loaded_at = NOW()
-                    """,
-                    (
-                        rec["anzsco_code"],
-                        rec.get("occupation_name", ""),
-                        rec.get("industry_code", ""),
-                        rec.get("industry_name", ""),
-                        rec.get("state", ""),
-                        rec["measure"],
-                        rec["base_year"],
-                        rec["projection_year"],
-                        rec.get("value"),
-                        run_id,
-                    ),
-                )
-                count += 1
+        for i in range(0, len(params), batch_size):
+            batch = params[i : i + batch_size]
+            with self.cursor() as cur:
+                cur.executemany(sql, batch)
+            count += len(batch)
+
         logger.info("Upserted %d projections records for run #%d", count, run_id)
         return count
 
@@ -312,9 +335,9 @@ class Database:
                 cur.execute(
                     """
                     INSERT INTO dim_geography
-                        (geo_code, geo_name, geo_level, state, parent_geo_code)
+                        (geo_code, geo_name, geo_type, state, parent_geo_code)
                     VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (geo_code, geo_level)
+                    ON CONFLICT (geo_code, geo_type)
                     DO UPDATE SET
                         geo_name = EXCLUDED.geo_name,
                         state = EXCLUDED.state,
@@ -323,7 +346,7 @@ class Database:
                     (
                         rec["geo_code"],
                         rec["geo_name"],
-                        rec["geo_level"],
+                        rec["geo_type"],
                         rec.get("state", ""),
                         rec.get("parent_geo_code", ""),
                     ),
@@ -338,33 +361,34 @@ class Database:
         """Upsert ANZSCO dimension records."""
         if not records:
             return 0
-        count = 0
+
+        sql = """
+            INSERT INTO dim_anzsco
+                (anzsco_code, anzsco_title, anzsco_level,
+                 parent_code, skill_level)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (anzsco_code)
+            DO UPDATE SET
+                anzsco_title = EXCLUDED.anzsco_title,
+                anzsco_level = EXCLUDED.anzsco_level,
+                parent_code = EXCLUDED.parent_code,
+                skill_level = EXCLUDED.skill_level
+        """
+        params = [
+            (
+                rec["anzsco_code"],
+                rec.get("anzsco_title", ""),
+                rec.get("anzsco_level", 0),
+                rec.get("parent_code", ""),
+                rec.get("skill_level", ""),
+            )
+            for rec in records
+        ]
+
         with self.cursor() as cur:
-            for rec in records:
-                cur.execute(
-                    """
-                    INSERT INTO dim_anzsco
-                        (anzsco_code, anzsco_title, anzsco_level,
-                         parent_code, skill_level)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (anzsco_code)
-                    DO UPDATE SET
-                        anzsco_title = EXCLUDED.anzsco_title,
-                        anzsco_level = EXCLUDED.anzsco_level,
-                        parent_code = EXCLUDED.parent_code,
-                        skill_level = EXCLUDED.skill_level
-                    """,
-                    (
-                        rec["anzsco_code"],
-                        rec.get("anzsco_title", ""),
-                        rec.get("anzsco_level", 0),
-                        rec.get("parent_code", ""),
-                        rec.get("skill_level", ""),
-                    ),
-                )
-                count += 1
-        logger.info("Upserted %d ANZSCO records", count)
-        return count
+            cur.executemany(sql, params)
+        logger.info("Upserted %d ANZSCO records", len(params))
+        return len(params)
 
     # --- Page Monitoring ---
 
@@ -433,6 +457,15 @@ class Database:
                 (page_url, content_hash, changed, links_found, error),
             )
 
+    def get_monitored_page(self, page_url: str) -> dict | None:
+        """Get full state for a single monitored page."""
+        with self.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM monitored_pages WHERE page_url = %s",
+                (page_url,),
+            )
+            return cur.fetchone()
+
     def get_monitored_pages(self) -> list[dict]:
         """Get all monitored page records."""
         with self.cursor() as cur:
@@ -441,12 +474,299 @@ class Database:
             )
             return cur.fetchall()
 
+    # --- Discovered Files ---
+
+    def upsert_discovered_file(self, file_data: dict) -> None:
+        """Upsert a discovered file URL from page monitoring."""
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO discovered_files
+                    (page_url, site, dataset, url, filename, parser_key)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url)
+                DO UPDATE SET
+                    last_seen_at = NOW(),
+                    removed_at = NULL,
+                    page_url = EXCLUDED.page_url,
+                    site = EXCLUDED.site,
+                    dataset = EXCLUDED.dataset,
+                    filename = EXCLUDED.filename
+                """,
+                (
+                    file_data["page_url"],
+                    file_data["site"],
+                    file_data["dataset"],
+                    file_data["url"],
+                    file_data["filename"],
+                    file_data.get("parser_key", ""),
+                ),
+            )
+
+    def mark_removed_files(self, page_url: str, current_urls: list[str]) -> None:
+        """Mark discovered files as removed if no longer present on page."""
+        if not current_urls:
+            # All files removed from this page
+            with self.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE discovered_files
+                    SET removed_at = NOW()
+                    WHERE page_url = %s AND removed_at IS NULL
+                    """,
+                    (page_url,),
+                )
+            return
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE discovered_files
+                SET removed_at = NOW()
+                WHERE page_url = %s
+                  AND removed_at IS NULL
+                  AND url != ALL(%s)
+                """,
+                (page_url, current_urls),
+            )
+
+    def get_discovered_files(self, dataset: str | None = None) -> list[dict]:
+        """Get active (non-removed) discovered files, optionally filtered by dataset."""
+        with self.cursor() as cur:
+            if dataset:
+                cur.execute(
+                    """
+                    SELECT * FROM discovered_files
+                    WHERE removed_at IS NULL AND dataset = %s
+                    ORDER BY dataset, filename
+                    """,
+                    (dataset,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT * FROM discovered_files
+                    WHERE removed_at IS NULL
+                    ORDER BY dataset, filename
+                    """
+                )
+            return cur.fetchall()
+
+    # --- Dataset Notes ---
+
+    def upsert_dataset_note(self, note: dict) -> None:
+        """Upsert a dataset note. Only updates updated_at when content changes."""
+        from psycopg.types.json import Json
+
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO dataset_notes
+                    (dataset, file_type, source_type, source_ref,
+                     note_text, note_tables, content_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (dataset, file_type, source_type)
+                DO UPDATE SET
+                    source_ref = EXCLUDED.source_ref,
+                    note_text = EXCLUDED.note_text,
+                    note_tables = EXCLUDED.note_tables,
+                    content_hash = EXCLUDED.content_hash,
+                    updated_at = CASE
+                        WHEN dataset_notes.content_hash != EXCLUDED.content_hash
+                        THEN NOW()
+                        ELSE dataset_notes.updated_at
+                    END
+                """,
+                (
+                    note["dataset"],
+                    note["file_type"],
+                    note["source_type"],
+                    note.get("source_ref", ""),
+                    note.get("note_text", ""),
+                    Json(note.get("note_tables", [])),
+                    note["content_hash"],
+                ),
+            )
+        logger.info(
+            "Upserted dataset note: %s/%s/%s",
+            note["dataset"], note["file_type"], note["source_type"],
+        )
+
+    def get_dataset_notes(self, dataset: str | None = None) -> list[dict]:
+        """Query dataset notes, optionally filtered by dataset."""
+        with self.cursor() as cur:
+            if dataset:
+                cur.execute(
+                    """
+                    SELECT * FROM dataset_notes
+                    WHERE dataset = %s
+                    ORDER BY dataset, file_type
+                    """,
+                    (dataset,),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM dataset_notes ORDER BY dataset, file_type"
+                )
+            return cur.fetchall()
+
+    # --- Total Vacancies Data ---
+
+    def upsert_total_vacancies_data(self, records: list[dict], run_id: int) -> int:
+        """Bulk upsert Total New Vacancies records using executemany."""
+        if not records:
+            return 0
+
+        sql = """
+            INSERT INTO total_vacancies_data
+                (dimension_type, level, anzsco_code, anzsco_title,
+                 geo_type, geo_area, parent_geo,
+                 period, value, scrape_run_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (dimension_type, anzsco_code, geo_area, geo_type, parent_geo, period)
+            DO UPDATE SET
+                level = EXCLUDED.level,
+                anzsco_title = EXCLUDED.anzsco_title,
+                value = EXCLUDED.value,
+                scrape_run_id = EXCLUDED.scrape_run_id,
+                loaded_at = NOW()
+        """
+
+        params = [
+            (
+                rec["dimension_type"],
+                rec["level"],
+                rec.get("anzsco_code", ""),
+                rec.get("anzsco_title", ""),
+                rec.get("geo_type", ""),
+                rec.get("geo_area", ""),
+                rec.get("parent_geo", ""),
+                rec["period"],
+                rec.get("value"),
+                run_id,
+            )
+            for rec in records
+        ]
+
+        batch_size = 10000
+        count = 0
+        for i in range(0, len(params), batch_size):
+            batch = params[i : i + batch_size]
+            with self.cursor() as cur:
+                cur.executemany(sql, batch)
+            count += len(batch)
+
+        logger.info("Upserted %d total vacancies records for run #%d", count, run_id)
+        return count
+
+    # --- RLMI Data ---
+
+    def upsert_rlmi_data(self, records: list[dict], run_id: int) -> int:
+        """Bulk upsert RLMI records using executemany."""
+        if not records:
+            return 0
+
+        sql = """
+            INSERT INTO rlmi_data
+                (data_source, sa4_code, sa4_name, geo_type, measure,
+                 period, value, rating_value, rating_text, scrape_run_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (sa4_code, measure, period)
+            DO UPDATE SET
+                data_source = EXCLUDED.data_source,
+                sa4_name = EXCLUDED.sa4_name,
+                geo_type = EXCLUDED.geo_type,
+                value = EXCLUDED.value,
+                rating_value = EXCLUDED.rating_value,
+                rating_text = EXCLUDED.rating_text,
+                scrape_run_id = EXCLUDED.scrape_run_id,
+                loaded_at = NOW()
+        """
+
+        params = [
+            (
+                rec["data_source"],
+                rec.get("sa4_code", ""),
+                rec.get("sa4_name", ""),
+                rec.get("geo_type", ""),
+                rec["measure"],
+                rec["period"],
+                rec.get("value"),
+                rec.get("rating_value"),
+                rec.get("rating_text", ""),
+                run_id,
+            )
+            for rec in records
+        ]
+
+        batch_size = 10000
+        count = 0
+        for i in range(0, len(params), batch_size):
+            batch = params[i : i + batch_size]
+            with self.cursor() as cur:
+                cur.executemany(sql, batch)
+            count += len(batch)
+
+        logger.info("Upserted %d RLMI records for run #%d", count, run_id)
+        return count
+
+    # --- LFT Data ---
+
+    def upsert_lft_data(self, records: list[dict], run_id: int) -> int:
+        """Bulk upsert Labour Force Trending records using executemany."""
+        if not records:
+            return 0
+
+        sql = """
+            INSERT INTO lft_data
+                (file_type, level, code, title, geo_area, geo_type,
+                 parent_code, period, value, scrape_run_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (file_type, code, geo_area, period)
+            DO UPDATE SET
+                level = EXCLUDED.level,
+                title = EXCLUDED.title,
+                geo_type = EXCLUDED.geo_type,
+                parent_code = EXCLUDED.parent_code,
+                value = EXCLUDED.value,
+                scrape_run_id = EXCLUDED.scrape_run_id,
+                loaded_at = NOW()
+        """
+
+        params = [
+            (
+                rec["file_type"],
+                rec["level"],
+                rec["code"],
+                rec.get("title", ""),
+                rec.get("geo_area", ""),
+                rec.get("geo_type", ""),
+                rec.get("parent_code", ""),
+                rec["period"],
+                rec.get("value"),
+                run_id,
+            )
+            for rec in records
+        ]
+
+        batch_size = 10000
+        count = 0
+        for i in range(0, len(params), batch_size):
+            batch = params[i : i + batch_size]
+            with self.cursor() as cur:
+                cur.executemany(sql, batch)
+            count += len(batch)
+            if count % 100000 == 0 or count == len(params):
+                logger.info("LFT upsert progress: %d / %d", count, len(params))
+
+        logger.info("Upserted %d LFT records for run #%d", count, run_id)
+        return count
+
     # --- Stats ---
 
     def get_dataset_stats(self) -> dict:
         """Get record counts per dataset table."""
         stats = {}
-        for table in ("salm_data", "ivi_data", "projections_data"):
+        for table in ("salm_data", "ivi_data", "projections_data", "total_vacancies_data", "rlmi_data", "lft_data"):
             with self.cursor() as cur:
                 try:
                     cur.execute(f"SELECT COUNT(*) as cnt FROM {table}")  # noqa: S608

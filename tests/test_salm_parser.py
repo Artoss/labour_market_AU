@@ -56,3 +56,28 @@ def test_classify_sheet_new_lga_unemployed():
 
 def test_classify_sheet_new_lga_force():
     assert _classify_sheet("Smoothed LGA labour force") == ("labour_force", "lga")
+
+
+# Unsmoothed sheet names
+def test_classify_sheet_unsmoothed_sa2_rate():
+    assert _classify_sheet("Unsmoothed SA2 unemployment rate") == ("unemployment_rate", "sa2")
+
+
+def test_classify_sheet_unsmoothed_sa2_unemployed():
+    assert _classify_sheet("Unsmoothed SA2 unemployment") == ("unemployed_persons", "sa2")
+
+
+def test_classify_sheet_unsmoothed_sa2_force():
+    assert _classify_sheet("Unsmoothed SA2 labour force") == ("labour_force", "sa2")
+
+
+def test_classify_sheet_unsmoothed_lga_rate():
+    assert _classify_sheet("Unsmoothed LGA unemployment rates") == ("unemployment_rate", "lga")
+
+
+def test_classify_sheet_unsmoothed_lga_unemployed():
+    assert _classify_sheet("Unsmoothed LGA unemployment") == ("unemployed_persons", "lga")
+
+
+def test_classify_sheet_unsmoothed_lga_force():
+    assert _classify_sheet("Unsmoothed LGA labour force") == ("labour_force", "lga")

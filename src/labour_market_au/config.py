@@ -101,6 +101,16 @@ class LoggingConfig(BaseModel):
     keep_backups: int = 5
 
 
+class MonitorPageConfig(BaseModel):
+    """A web page to monitor for content changes."""
+    site: str
+    dataset: str
+    page_url: str
+    update_frequency: str = "quarterly"
+    content_selector: str = ""
+    date_selector: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Root config
 # ---------------------------------------------------------------------------
@@ -114,6 +124,7 @@ class AppConfig(BaseModel):
     downloads: DownloadsConfig = Field(default_factory=DownloadsConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    monitor_pages: list[MonitorPageConfig] = Field(default_factory=list)
 
     def config_hash(self) -> str:
         """SHA256 hash of config for run tracking."""

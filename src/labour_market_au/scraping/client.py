@@ -107,7 +107,7 @@ class DownloadClient:
         known_hash: str | None = None,
     ) -> DownloadResult:
         """Download a single file. Skip if hash matches known_hash."""
-        out_dir = self.data_dir / dataset
+        out_dir = self.data_dir / site / dataset
         out_dir.mkdir(parents=True, exist_ok=True)
         filepath = out_dir / filename
 

@@ -14,6 +14,8 @@ scope:
     - "ivi"
     - "projections"
     - "total_vacancies"
+    - "rlmi"
+    - "labour_force_trending"
 
 # Rate limiting & politeness
 http:
@@ -38,7 +40,7 @@ database:
 
 # Downloads
 downloads:
-  base_dir: "./data"
+  base_dir: "./downloads"
 
 # Export
 export:
@@ -46,6 +48,51 @@ export:
   format: "csv"
   output_dir: "./exports"
   timestamp_files: true
+
+# Monitored pages for change detection
+monitor_pages:
+  - site: "jsa"
+    dataset: "ivi"
+    page_url: "https://www.jobsandskills.gov.au/data/internet-vacancy-index"
+    update_frequency: "monthly"
+    content_selector: "div.field--type-text-long"
+    date_selector: "div.field--type-text-long strong"
+  - site: "jsa"
+    dataset: "projections"
+    page_url: "https://www.jobsandskills.gov.au/data/employment-projections"
+    update_frequency: "annual"
+    content_selector: "div.field--type-text-long"
+  - site: "jsa"
+    dataset: "total_vacancies"
+    page_url: "https://www.jobsandskills.gov.au/data/total-new-vacancies"
+    update_frequency: "monthly"
+    content_selector: "div.field--type-text-long"
+  - site: "jsa"
+    dataset: "salm"
+    page_url: "https://www.jobsandskills.gov.au/data/small-area-labour-markets"
+    update_frequency: "quarterly"
+    content_selector: "div.field--type-text-long"
+    date_selector: "div.field--type-text-long strong"
+  - site: "jsa"
+    dataset: "rlmi"
+    page_url: "https://www.jobsandskills.gov.au/data/regional-labour-market-indicator"
+    update_frequency: "quarterly"
+    content_selector: "div.field--type-text-long"
+  - site: "jsa"
+    dataset: "labour_force_trending"
+    page_url: "https://www.jobsandskills.gov.au/data/labour-force-trending"
+    update_frequency: "quarterly"
+    content_selector: "div.field--type-text-long"
+  - site: "dewr"
+    dataset: "salm_smoothed"
+    page_url: "https://www.dewr.gov.au/employment-research/small-area-labour-markets"
+    update_frequency: "quarterly"
+    content_selector: "div.field--type-text-long"
+  - site: "dewr"
+    dataset: "salm_unsmoothed"
+    page_url: "https://www.dewr.gov.au/employment-research/small-area-labour-markets/methodology"
+    update_frequency: "quarterly"
+    content_selector: "div.field--type-text-long"
 
 # Logging
 logging:

@@ -9,6 +9,8 @@ import hashlib
 import json
 import logging
 import re
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 
 from bs4 import BeautifulSoup
 
@@ -127,3 +129,48 @@ def _extract_next_release(soup: BeautifulSoup) -> str | None:
             if len(full_text) < 300:
                 return full_text
     return None
+
+
+def _filename_from_url(url: str) -> str:
+    """Extract filename from a download URL."""
+    path = PurePosixPath(url.split("?")[0].split("#")[0])
+    return path.name
+
+
+@dataclass
+class PageChangeSummary:
+    """Summary of changes between two page checks."""
+
+    content_changed: bool
+    new_links: list[str] = field(default_factory=list)
+    removed_links: list[str] = field(default_factory=list)
+    release_date_changed: bool = False
+    old_release_date: str | None = None
+    new_release_date: str | None = None
+
+
+def diff_page_check(
+    current: PageCheckResult,
+    previous_links: list[str] | None,
+    previous_release_label: str | None,
+) -> PageChangeSummary:
+    """Compare current check result with previous state to produce a diff."""
+    prev_set = set(previous_links) if previous_links else set()
+    curr_set = set(current.download_links)
+
+    new_links = sorted(curr_set - prev_set)
+    removed_links = sorted(prev_set - curr_set)
+
+    release_changed = (
+        current.last_updated_label != previous_release_label
+        and current.last_updated_label is not None
+    )
+
+    return PageChangeSummary(
+        content_changed=current.changed,
+        new_links=new_links,
+        removed_links=removed_links,
+        release_date_changed=release_changed,
+        old_release_date=previous_release_label if release_changed else None,
+        new_release_date=current.last_updated_label if release_changed else None,
+    )
