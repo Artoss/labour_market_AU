@@ -235,7 +235,19 @@ def _supabase_conninfo() -> str:
 
 
 def _open_supabase() -> psycopg.Connection:
-    return psycopg.connect(_supabase_conninfo(), row_factory=dict_row, autocommit=False)
+    # `prepare_threshold=None` disables psycopg3's automatic prepared-statement
+    # caching. The Supabase pooler (Supavisor) in transaction mode rejects
+    # session-level prepared statements with "DuplicatePreparedStatement:
+    # prepared statement _pg3_0 already exists" once the same statement is
+    # executed a second time. Disabling caching keeps every execute() a
+    # plain parameterised query — first warehouse-mirror run on the VPS
+    # hit this 2026-05-18 (StatDesk_Topics_ETL learned the same lesson).
+    return psycopg.connect(
+        _supabase_conninfo(),
+        row_factory=dict_row,
+        autocommit=False,
+        prepare_threshold=None,
+    )
 
 
 def _assert_warehouse_unique_includes_source_dataset(sb: psycopg.Connection) -> None:
