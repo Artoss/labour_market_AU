@@ -149,6 +149,108 @@ class PageChangeSummary:
     new_release_date: str | None = None
 
 
+def extract_future_releases(
+    soup: BeautifulSoup,
+    dataset: str,
+    site: str,
+    source_url: str,
+) -> list[dict]:
+    """Extract future release dates from a page's HTML.
+
+    Finds <table> elements near "Future release dates" headings and parses
+    them into structured records for the publication_calendar table.
+
+    Returns list of dicts with keys:
+        dataset, site, data_period, release_date, release_date_parsed, source_url
+    """
+    from dateutil import parser as dateutil_parser
+
+    results: list[dict] = []
+
+    # Find headings that mention future release dates
+    headings = soup.find_all(
+        string=re.compile(r"future\s+release\s+date", re.IGNORECASE),
+    )
+
+    for heading_text in headings:
+        # Walk up to the parent element, then find the next table
+        parent = heading_text.parent
+        if parent is None:
+            continue
+
+        # Look for a table in the siblings after this heading
+        table = None
+        for sibling in parent.find_all_next():
+            if sibling.name == "table":
+                table = sibling
+                break
+            # Stop if we hit another heading (went too far)
+            if sibling.name in ("h1", "h2", "h3", "h4", "h5", "h6"):
+                break
+
+        if table is None:
+            continue
+
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+
+        # Parse header row to find column indices
+        headers = [th.get_text(strip=True).lower() for th in rows[0].find_all(["th", "td"])]
+
+        # Try to identify data_period and release_date columns
+        period_idx = None
+        date_idx = None
+        for i, h in enumerate(headers):
+            if "data" in h or "period" in h or "reference" in h or "month" in h:
+                period_idx = i
+            elif "release" in h or "date" in h or "publish" in h:
+                date_idx = i
+
+        # Fallback: assume first col = period, second = release date
+        if period_idx is None and date_idx is None and len(headers) >= 2:
+            period_idx = 0
+            date_idx = 1
+
+        if period_idx is None or date_idx is None:
+            continue
+
+        # Parse data rows
+        for row in rows[1:]:
+            cells = [td.get_text(strip=True) for td in row.find_all(["th", "td"])]
+            if len(cells) <= max(period_idx, date_idx):
+                continue
+
+            data_period = cells[period_idx]
+            release_date = cells[date_idx]
+
+            if not data_period or not release_date:
+                continue
+
+            # Try to parse the release date
+            release_date_parsed = None
+            try:
+                parsed = dateutil_parser.parse(release_date, dayfirst=True, fuzzy=True)
+                release_date_parsed = parsed.date()
+            except (ValueError, OverflowError):
+                pass
+
+            results.append({
+                "dataset": dataset,
+                "site": site,
+                "data_period": data_period,
+                "release_date": release_date,
+                "release_date_parsed": release_date_parsed,
+                "source_url": source_url,
+            })
+
+    logger.info(
+        "Extracted %d future release entries from %s/%s",
+        len(results), site, dataset,
+    )
+    return results
+
+
 def diff_page_check(
     current: PageCheckResult,
     previous_links: list[str] | None,

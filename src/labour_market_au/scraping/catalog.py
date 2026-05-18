@@ -140,6 +140,40 @@ KNOWN_FILES: list[FileDataset] = [
     ),
 ]
 
+DATASET_PUBLICATION_MAP: dict[str, dict[str, str]] = {
+    "ivi": {
+        "title": "Internet Vacancy Index",
+        "publisher": "JSA",
+        "frequency": "Monthly",
+    },
+    "salm": {
+        "title": "Small Area Labour Markets",
+        "publisher": "DEWR",
+        "frequency": "Quarterly",
+    },
+    "projections": {
+        "title": "Employment Projections",
+        "publisher": "JSA",
+        "frequency": "Annual",
+    },
+    "total_vacancies": {
+        "title": "Total New Vacancies",
+        "publisher": "JSA",
+        "frequency": "Monthly",
+    },
+    "rlmi": {
+        "title": "Regional Labour Market Indicator",
+        "publisher": "JSA",
+        "frequency": "Quarterly",
+    },
+    "labour_force_trending": {
+        "title": "Labour Force Trending",
+        "publisher": "JSA",
+        "frequency": "Quarterly",
+    },
+}
+
+
 def get_files(
     sites: list[str] | None = None,
     datasets: list[str] | None = None,

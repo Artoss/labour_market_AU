@@ -120,6 +120,26 @@ def export_cmd(ctx, dataset, fmt):
     _run_export(config, datasets=datasets, fmt=fmt)
 
 
+@cli.command()
+@click.option("--serve", is_flag=True, help="Start Prefect scheduler (daily 8am AEST cron)")
+@click.pass_context
+def automate(ctx, serve):
+    """Prefect-based automation: refresh calendar, check due releases, auto-load."""
+    from labour_market_au.prefect_flow import _wait_for_prefect_api, jsa_monitor_flow
+
+    _wait_for_prefect_api()
+
+    if serve:
+        click.echo("Starting Prefect scheduler (daily 8am AEST)...")
+        jsa_monitor_flow.serve(
+            name="jsa-monitor",
+            cron="0 22 * * *",  # 8am AEST = 10pm UTC previous day
+        )
+    else:
+        click.echo("Running one-shot JSA monitor flow...")
+        jsa_monitor_flow()
+
+
 @cli.command(name="list")
 @click.pass_context
 def list_cmd(ctx):
@@ -161,9 +181,12 @@ _PARSER_KEY_PATTERNS: dict[str, str] = {
 
 def _infer_parser_key(filename: str, dataset: str) -> str:
     """Infer a parser_key from a filename for discovered files."""
-    lower = filename.lower()
+    from urllib.parse import unquote
+    # JSA sometimes serves filenames URL-encoded (e.g. "Labour%20Market%20Ratings%20by%20SA4.xlsx").
+    # Decode and normalise spaces to underscores so prefix patterns match.
+    normalised = unquote(filename).lower().replace(" ", "_")
     for prefix, key in _PARSER_KEY_PATTERNS.items():
-        if lower.startswith(prefix):
+        if normalised.startswith(prefix):
             return key
     return ""
 

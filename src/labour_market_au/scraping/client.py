@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import httpx
+from curl_cffi import requests as curl_requests
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -20,6 +21,11 @@ from tenacity import (
 )
 
 from labour_market_au.config import HttpConfig
+
+# Chrome version impersonated for TLS fingerprint. Akamai (and other major WAFs)
+# fingerprint stock python-httpx and reject it; curl_cffi replays a real Chrome
+# JA3/JA4 handshake. Pinned to a recent stable Chrome — bump occasionally.
+_IMPERSONATE_TARGET = "chrome120"
 
 logger = logging.getLogger("labour_market_au.scraping.client")
 
@@ -54,10 +60,10 @@ class DownloadClient:
     def __init__(self, config: HttpConfig, data_dir: str | Path = "data"):
         self.config = config
         self.data_dir = Path(data_dir)
-        self._client = httpx.Client(
-            timeout=httpx.Timeout(config.timeout_seconds),
+        self._client = curl_requests.Session(
+            impersonate=_IMPERSONATE_TARGET,
+            timeout=config.timeout_seconds,
             headers=config.default_headers,
-            follow_redirects=True,
         )
         self._last_request_time: float = 0
 
@@ -151,13 +157,13 @@ class DownloadClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=2, min=4, max=60),
-        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TransportError)),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TransportError, curl_requests.errors.RequestsError)),
         reraise=True,
     )
-    def _fetch_with_retry(self, url: str) -> httpx.Response:
+    def _fetch_with_retry(self, url: str):
         """Fetch URL with automatic retry on failure."""
         headers = self._rotate_user_agent()
-        response = self._client.get(url, headers=headers)
+        response = self._client.get(url, headers=headers, allow_redirects=True)
         response.raise_for_status()
         return response
 

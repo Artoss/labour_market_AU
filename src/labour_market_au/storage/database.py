@@ -761,6 +761,75 @@ class Database:
         logger.info("Upserted %d LFT records for run #%d", count, run_id)
         return count
 
+    # --- Publication Calendar ---
+
+    def get_due_releases(self, as_of_date) -> list[dict]:
+        """Return unprocessed calendar rows where release_date_parsed <= as_of_date."""
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM publication_calendar
+                WHERE release_date_parsed <= %s
+                  AND processed_at IS NULL
+                ORDER BY release_date_parsed
+                """,
+                (as_of_date,),
+            )
+            return cur.fetchall()
+
+    def upsert_publication_calendar(self, rows: list[dict]) -> int:
+        """Batch upsert future release entries. Returns count of rows upserted."""
+        if not rows:
+            return 0
+
+        sql = """
+            INSERT INTO publication_calendar
+                (dataset, site, data_period, release_date,
+                 release_date_parsed, source_url)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (dataset, site, data_period)
+            DO UPDATE SET
+                release_date = EXCLUDED.release_date,
+                release_date_parsed = EXCLUDED.release_date_parsed,
+                source_url = EXCLUDED.source_url,
+                scraped_at = NOW()
+        """
+
+        count = 0
+        with self.cursor() as cur:
+            for row in rows:
+                cur.execute(sql, (
+                    row["dataset"],
+                    row["site"],
+                    row["data_period"],
+                    row["release_date"],
+                    row.get("release_date_parsed"),
+                    row["source_url"],
+                ))
+                count += 1
+
+        logger.info("Upserted %d publication calendar entries", count)
+        return count
+
+    def mark_release_processed(
+        self, dataset: str, data_period: str, scrape_run_id: int,
+    ) -> None:
+        """Mark a calendar release as processed with a link to the scrape run."""
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE publication_calendar
+                SET processed_at = NOW(),
+                    scrape_run_id = %s
+                WHERE dataset = %s AND data_period = %s
+                """,
+                (scrape_run_id, dataset, data_period),
+            )
+        logger.info(
+            "Marked release processed: %s / %s (run #%d)",
+            dataset, data_period, scrape_run_id,
+        )
+
     # --- Stats ---
 
     def get_dataset_stats(self) -> dict:
