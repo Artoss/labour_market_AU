@@ -44,6 +44,35 @@ class HttpConfig(BaseModel):
 
 
 class DatabaseConfig(BaseModel):
+    """PostgreSQL connection settings.
+
+    The five `pg_*` fields default to laptop-friendly localhost values.
+    `apply_env_overrides` then reads `PGHOST` / `PGPORT` / `PGUSER` /
+    `PGPASSWORD` / `PGDATABASE` from the environment and overrides any
+    that are set — this is the production deployment hook used by the
+    Prefect worker on the Dokploy VPS to point flow runs at the shared
+    `scraperportfoliopg` container instead of localhost.
+
+    Env-var injection chain in production:
+
+      1. Prefect worker container compose env sets PGHOST / PGPORT /
+         PGUSER / PGPASSWORD (shared portfolio credentials, same for
+         every deployment).
+      2. Per-deployment `prefect.yaml` `job_variables.env` sets
+         PGDATABASE (e.g. `labour_market_au` for this scraper,
+         `sqm_research` for SQM).
+      3. Flow run subprocess inherits both; `apply_env_overrides`
+         reads from `os.environ`; `Database.connect()` uses keyword-
+         form `connection_params` (no URI parsing, so special chars in
+         the password survive untouched).
+
+    Local-dev path: `.env` file at the repo root is loaded by
+    `load_dotenv()` before this model is instantiated, populating the
+    same env vars from the developer's preferred local settings.
+
+    Test coverage: `tests/test_config.py` pins both the default
+    behaviour and the env-override behaviour against regression.
+    """
     pg_host: str = "localhost"
     pg_port: int = 5432
     pg_database: str = "labour_market_au"
