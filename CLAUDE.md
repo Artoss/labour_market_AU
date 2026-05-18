@@ -61,3 +61,158 @@ uv run pytest tests/ -v                                      # Run tests (142 pa
 - psycopg 3 with dict_row, upsert pattern
 - Pydantic v2 for config and models
 - Migrations must be idempotent (re-run on every command)
+
+## Production deployment (Dokploy / Prefect work pool)
+
+As of 2026-05-18 this scraper runs on the shared Dokploy Prefect work pool
+alongside Scraper_0021_SQM_Research. The laptop is no longer in the
+production data path — both scraping and warehouse mirroring run on the
+VPS regardless of whether the developer machine is on.
+
+### Deployments
+
+Declared in `prefect.yaml` at the repo root. Registered via:
+
+```bash
+PREFECT_API_URL=https://prefect.statdesk.com.au/api \
+PREFECT_API_AUTH_STRING="admin:3yOh6oefGukVZLceJWsN" \
+.venv/Scripts/python.exe -m prefect deploy --all
+```
+
+| Deployment | Cron (UTC) | Cron (AEST) | Entrypoint | What it does |
+|---|---|---|---|---|
+| `labour-daily-monitor` | `0 22 * * *` | 8am | `src/labour_market_au/prefect_flow.py:jsa_monitor_flow` | Refresh publication_calendar from JSA/DEWR; load any dataset due today; quiet exit otherwise |
+| `labour-warehouse-mirror` | `0 1 * * *` | 11am | `pipeline_warehouse_mirror.py:mirror` | Full re-mirror of labour_market_au → Supabase `stats_warehouse.observations` (~105k rows, idempotent, ~30-60s) |
+
+Both fire from the shared `prefect-worker` container. The worker's compose
+env provides `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` pointing at the
+co-located `scraperportfoliopg` Postgres container; `prefect.yaml`
+`job_variables.env` injects `PGDATABASE=labour_market_au` per deployment.
+
+### Data flow
+
+```
+JSA / DEWR pages
+     │
+     │   (curl_cffi chrome120, Akamai bypass — verified working from VPS IP)
+     ▼
+labour-daily-monitor flow
+     │
+     │   parse + load
+     ▼
+labour_market_au DB on scraperportfoliopg (VPS Postgres)
+     │
+     │   labour-warehouse-mirror flow
+     │   (Decimal-safe upsert, source_dataset='jsa_labour',
+     │    prepare_threshold=None for Supabase pooler)
+     ▼
+Supabase stats_warehouse.observations
+     │
+     │   public.v_observations proxy view
+     ▼
+statdesk.com.au / Topics ETL / Topic datapack ZIPs
+```
+
+### Two-tenant scraperportfoliopg
+
+`scraperportfoliopg` (container name
+`prefect-server-scraperportfoliopg-dblay6-postgres-1` as of 2026-05) hosts:
+
+- `sqm_research` — SQM Research scraper's data (~9.6 GB)
+- `labour_market_au` — this scraper's data (~3.3 GB after initial migration)
+
+Total ~13 GB on the VPS's 59 GB root FS. Both DBs use `postgres` superuser,
+both pulled in via the same worker env-var pattern.
+
+### Initial DB migration to the VPS (one-off, completed 2026-05-18)
+
+```bash
+docker exec prefect-server-scraperportfoliopg-dblay6-postgres-1 \
+  psql -U postgres -c "CREATE DATABASE labour_market_au WITH OWNER postgres;"
+
+PGPASSWORD=<laptop-pg-password> pg_dump -h localhost -U postgres -d labour_market_au \
+  --format=custom --compress=9 --no-owner --no-acl --verbose 2>/tmp/dump.log \
+| ssh root@<vps> \
+    "docker exec -i prefect-server-scraperportfoliopg-dblay6-postgres-1 \
+     pg_restore -U postgres -d labour_market_au --no-owner --no-acl --verbose 2>&1"
+```
+
+Runs from the laptop, streams the dump via SSH stdin to `pg_restore` on the
+VPS. ~15-30 min for 3.3 GB depending on upload bandwidth.
+
+### Manual run / smoke test
+
+Trigger a flow run without unpausing the schedule:
+
+```bash
+PREFECT_API_URL=https://prefect.statdesk.com.au/api \
+PREFECT_API_AUTH_STRING="admin:3yOh6oefGukVZLceJWsN" \
+.venv/Scripts/python.exe -c "
+from prefect.client.orchestration import get_client
+from uuid import UUID
+import asyncio
+async def main():
+    async with get_client() as c:
+        run = await c.create_flow_run_from_deployment(UUID('<deployment-id>'))
+        print(f'Created: {run.id} | name={run.name}')
+asyncio.run(main())
+"
+```
+
+Deployment IDs visible in the Prefect UI (https://prefect.statdesk.com.au)
+or via `prefect deployment ls`.
+
+### `pipeline_warehouse_mirror.py` design notes
+
+- **Full re-mirror per fire** (no watermark) — ~105k rows is small enough
+  that idempotent upsert in ~30-60s is fine. Add watermarking later if
+  data volume grows.
+- **Mapping logic ported from `StatDesk_Topics_ETL/sources/jsa_labour.py`**.
+  Same metric slugs, same period normalisation. Warehouse rows are
+  bit-for-bit identical regardless of which path produced them.
+- **`prepare_threshold=None`** on the Supabase connection — Supavisor in
+  transaction mode trips on psycopg3's prepared-statement caching.
+- **`make_conninfo` keyword form** for Supabase — URI form silently
+  truncates dotted usernames (`postgres.<ref>`) on the bundled libpq.
+- **`SUPABASE_PG_PASSWORD_B64`** preferred over plain — base64 alphabet
+  survives shell quoting; plain passwords with `$` `;` `]` `}` get
+  silently mangled. See `Scraper_0021_SQM_Research/docs/operator/
+  DOKPLOY_ENV_VAR_MANGLING.md`.
+- **Schema guard** refuses to run if `stats_warehouse.observations`
+  UNIQUE constraint doesn't include `source_dataset`. That constraint
+  ships with StatDeskAU_web migration `warehouse_provenance`.
+
+### Operational caveats picked up during migration
+
+Lessons recorded in `prefect-worker/README.md` § "Onboarding gotchas":
+
+1. `prefect deploy` needs `PREFECT_API_AUTH_STRING` (basic auth) in
+   addition to `PREFECT_API_URL`
+2. Multi-line bash env-var prefix silently loses the assignments — use
+   `export` or single-line
+3. Supabase pooler `DuplicatePreparedStatement` → `prepare_threshold=None`
+4. Worker only sees committed code — `git status` before deploying
+5. PuTTY paste corrupts heredocs / long base64 — use SSH stdin piping
+6. PR merge timing — cherry-pick stranded commits to master
+
+### Failure mode
+
+If the laptop is off or the operator is unavailable:
+- `labour-daily-monitor` fires anyway, scrapes, loads to VPS PG
+- `labour-warehouse-mirror` fires anyway, mirrors to Supabase
+- Slack notifications continue to land in the StatsDatabaseAU channel
+- Topic datapacks on statdesk.com.au continue to update on the same cron
+
+If the VPS is down:
+- Scrape stops; warehouse keeps last-good data
+- Frontend keeps serving cached + last-good Supabase rows
+- Slack failure notifications signal the outage
+- Once VPS returns, next daily fire catches up automatically
+
+### Legacy paths (preserved, currently redundant)
+
+- `python -m labour_market_au.prefect_flow` — runs the flow locally
+  against laptop PG. Still works for ad-hoc operator backfills.
+- `StatDesk_Topics_ETL/sources/jsa_labour.py` — same mapping logic ported
+  into `pipeline_warehouse_mirror.py`. Kept as operator-side fallback.
+  Slated for removal after a month of mirror-flow stability.
