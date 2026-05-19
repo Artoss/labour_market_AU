@@ -30,6 +30,12 @@ dev = [
     "pytest>=7.0",
     "respx>=0.21",
 ]
+# CI-only tooling. Kept out of `dev` so laptop devs running pytest don't
+# pull in a CLI they don't use. CI installs `.[dev,ci]`. Pinned to an
+# immutable commit SHA -- tags can be force-pushed.
+ci = [
+    "statdesk-prefect-tools @ git+https://github.com/StatDeskAU/statdesk-prefect-tools.git@e3b3fa96514dbcf253ecf7f0f3af4b1888ee6edd",
+]
 
 [dependency-groups]
 dev = [
@@ -39,6 +45,12 @@ dev = [
 
 [project.scripts]
 labour-market-au = "labour_market_au.main:cli"
+
+[tool.hatch.metadata]
+# Required so `statdesk-prefect-tools @ git+https://...` (PEP 508 direct
+# reference URL) is accepted by hatchling. Default is False -- direct
+# refs are rejected to avoid surprise network installs from the index path.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/labour_market_au"]
