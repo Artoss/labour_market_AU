@@ -1,0 +1,124 @@
+name: deploy
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: prefect-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install scraper + dev + ci deps
+        run: pip install -e ".[dev,ci]"
+
+      - name: Preflight (the 6 lessons, mechanically)
+        run: statdesk-preflight .
+
+  tests:
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install scraper + dev deps
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest (unit tests only)
+        # If you add tests that need infra GH runners don't have
+        # (live Postgres, Playwright, etc.), exclude them with
+        # `--ignore=tests/<file>.py`. Better: a sibling
+        # `integration-tests` job with `services: postgres:`.
+        run: pytest -q
+
+  deploy:
+    needs: [preflight, tests]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      PREFECT_API_URL: ${{ vars.PREFECT_API_URL }}
+      PREFECT_API_AUTH_STRING: ${{ secrets.PREFECT_API_AUTH_STRING }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install scraper + ci deps
+        run: pip install -e ".[ci]"
+
+      - name: Verify Prefect deploy env
+        run: |
+          if [ -z "${PREFECT_API_URL}" ]; then
+            echo "::error::PREFECT_API_URL variable is empty or unset."; exit 1
+          fi
+          if [ -z "${PREFECT_API_AUTH_STRING}" ]; then
+            echo "::error::PREFECT_API_AUTH_STRING secret is empty or unset."; exit 1
+          fi
+
+      - name: Prefect deploy
+        run: prefect deploy --all --prefect-file prefect.yaml
+
+  notify:
+    # Always runs on push so a Slack message lands even if preflight, tests,
+    # or deploy failed. Skipped on pull_request to avoid PR noise.
+    needs: [preflight, tests, deploy]
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack notify result
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Raw curl -- zero dependencies. Survives even when every earlier
+        # job (incl. pip install) failed before any Python package was importable.
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "[notify] SLACK_WEBHOOK_URL unset -- skipping"; exit 0
+          fi
+          if   [ "$DEPLOY_RESULT"    = "success"   ]; then icon=":white_check_mark:"; verb="Prefect deploy SUCCESS"
+          elif [ "$DEPLOY_RESULT"    = "cancelled" ] || \
+               [ "$TESTS_RESULT"     = "cancelled" ] || \
+               [ "$PREFLIGHT_RESULT" = "cancelled" ]; then icon=":grey_exclamation:"; verb="Prefect deploy CANCELLED"
+          elif [ "$PREFLIGHT_RESULT" = "failure"   ]; then icon=":x:";                verb="Prefect deploy FAILED (preflight)"
+          elif [ "$TESTS_RESULT"     = "failure"   ]; then icon=":x:";                verb="Prefect deploy FAILED (tests)"
+          else                                             icon=":x:";                verb="Prefect deploy FAILED"
+          fi
+          payload=$(printf '{"text":"%s *%s*  `%s`  <%s|view run>"}' "$icon" "$verb" "$REPO" "$RUN_URL")
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data-raw "$payload" "$SLACK_WEBHOOK_URL" || true

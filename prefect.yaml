@@ -1,46 +1,31 @@
 # Prefect deployment manifest for Scraper_0062_JobsAndSkills.
 #
-# Register with: `prefect deploy --all --prefect-file prefect.yaml`
-# (from a laptop with `PREFECT_API_URL=https://prefect.statdesk.com.au/api`).
-# The shared prefect-worker (Infra_PrefectWorker, default work pool) executes
-# these deployments — same worker that handles Scraper_0021_SQM_Research.
+# Auto-deployed by .github/workflows/deploy.yml on push to master.
+# The shared prefect-worker (Dokploy) executes these deployments via the
+# `default` work pool -- same worker that handles sqm-research.
 #
-# Pattern reference: Scraper_0021_SQM_Research/prefect.yaml.
-#
-# IMPORTANT — DB config dependency:
-#   These deployments expect the labour_market_au DB to live on the VPS-side
-#   `scraperportfoliopg` Postgres (the same container that hosts sqm_research).
-#   The `labour-daily-monitor` deployment will fail with "FATAL: database
-#   labour_market_au does not exist" until:
-#     (a) step 4 of the Option-4 plan ports the DB via pg_dump|pg_restore, and
-#     (b) step 3 refactors src/labour_market_au/config.py to honour the
-#         worker-injected PGHOST / PGPORT env vars instead of localhost.
-#   Until both happen, keep `paused: true` on `labour-daily-monitor` below.
-#   The `labour-warehouse-mirror` deployment also depends on
-#   pipeline_warehouse_mirror.py existing — also paused: true until step 4.
+# Pattern reference: cookiecutter-statdesk-scraper / Scraper_0021_SQM_Research.
 
 name: labour-market-au
 prefect-version: 3.x
 
 pull:
-  # Clone this repo per scheduled fire. Same pattern as SQM Research.
-  # The `github-pat` Prefect secret block is shared across the portfolio
-  # (configured in the central Prefect server). For a private repo, the
-  # access_token must have `repo` scope.
+  # Clone this repo per scheduled fire. The `github-pat` Prefect Secret
+  # block (configured on the central server) must have read access to
+  # StatDeskAU/labour_market_AU.
   - prefect.deployments.steps.git_clone:
       id: clone
-      repository: https://github.com/Artoss/labour_market_AU.git
+      repository: https://github.com/StatDeskAU/labour_market_AU.git
       branch: master
       access_token: "{{ prefect.blocks.secret.github-pat }}"
-  # Prefect's `run_shell_script` is a misnomer — it does NOT spawn a shell.
-  # It shlex-splits the script and exec's the first token as a binary.
-  # Shell builtins (set, &&, ||, |, redirects, multi-line) all fail. Each
-  # step runs exactly ONE command. To chain multiple commands, use multiple
-  # steps. (Lesson from SQM Research PR #8.)
+  # Prefect's `run_shell_script` is a misnomer -- it does NOT spawn a
+  # shell. It shlex-splits the script and exec's the first token as a
+  # binary. Shell builtins (&&, ||, |, multi-line) all fail. One step
+  # per command.
   - prefect.deployments.steps.run_shell_script:
       id: deps
-      # Install scraper into the worker's system Python so Prefect's loader
-      # can `import labour_market_au`.
+      # Install scraper into the worker's system Python so Prefect's
+      # loader can `import labour_market_au`.
       script: pip install --no-cache-dir .
       directory: "{{ clone.directory }}"
   - prefect.deployments.steps.run_shell_script:
@@ -53,21 +38,20 @@ deployments:
   # Calendar-driven daily monitor. Each fire:
   #   1. Refreshes the publication_calendar from JSA/DEWR pages
   #   2. Queries the calendar for releases due today
-  #   3. If any are due → monitor page → download → parse → load
-  #   4. If nothing due → quiet exit (most days)
+  #   3. If any are due -> monitor page -> download -> parse -> load
+  #   4. If nothing due -> quiet exit (most days)
   #
   # 22:00 UTC = 8am AEST / 9am AEDT. The calendar covers all 6 datasets
   # (SALM / IVI / Projections / TNV / RLMI / LFT) at their respective
   # cadences (monthly / quarterly / annual), so one daily flow handles
-  # the lot — unlike SQM's per-dataset flows where each dataset has its
-  # own cadence.
+  # the lot.
   - name: labour-daily-monitor
     entrypoint: src/labour_market_au/prefect_flow.py:jsa_monitor_flow
     work_pool:
       name: default
     tags: [labour-market-au, jsa-dewr-scrape]
     concurrency_limit: 1
-    paused: true  # until DB config refactor (step 3) + DB migration (step 4) land
+    paused: false
     schedule:
       cron: "0 22 * * *"
       timezone: UTC
@@ -75,21 +59,20 @@ deployments:
       env:
         PGDATABASE: labour_market_au
         # PGHOST / PGPORT / PGUSER / PGPASSWORD inherit from the worker
-        # container's compose env (already pointed at scraperportfoliopg
-        # for the SQM deployments).
+        # container's compose env (pointed at scraperportfoliopg).
         # SLACK_WEBHOOK_URL inherits from worker for notify.py.
 
   # Daily mirror from labour_market_au (VPS PG) -> Supabase stats_warehouse.
-  # Runs 3 hours after the daily monitor so any late-publishing data has
-  # been loaded by the time the mirror tries to read it. Re-running is
-  # idempotent (upsert on the warehouse unique constraint).
+  # Runs 3 hours after the daily monitor so late-publishing data has been
+  # loaded before the mirror reads it. Re-running is idempotent (upsert
+  # on the warehouse unique constraint).
   - name: labour-warehouse-mirror
     entrypoint: pipeline_warehouse_mirror.py:mirror
     work_pool:
       name: default
     tags: [labour-market-au, warehouse]
     concurrency_limit: 1
-    paused: true  # until pipeline_warehouse_mirror.py is built (step 4)
+    paused: false
     schedule:
       cron: "0 1 * * *"
       timezone: UTC
@@ -97,7 +80,6 @@ deployments:
       env:
         PGDATABASE: labour_market_au
         # SUPABASE_PG_HOST / _PORT / _DATABASE / _USER / _PASSWORD inherit
-        # from the worker container's compose env (already in place for
-        # sqm-warehouse-mirror).
+        # from the worker container's compose env.
         # SUPABASE_PG_PASSWORD_B64 fallback for shell-special chars also
-        # inherited — see prefect-worker README.
+        # inherited -- see prefect-worker README.
